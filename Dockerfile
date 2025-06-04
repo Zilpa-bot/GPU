@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
         torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 && \
     pip install \
-        transformers==4.52.4 accelerate==1.7.0 \
+        transformers==4.52.0 accelerate==1.7.0 \
         nemo_toolkit[asr]==2.3.1 silero-vad==5.1.2 \
         sounddevice==0.5.2 websockets==15.0.1 \
         numpy==1.26.4 scipy==1.13.0 \
