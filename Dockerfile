@@ -27,9 +27,11 @@ ENV TORCH_COMPILE_DISABLE=1 \
 
 # ===== OS deps =====
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ffmpeg wget curl ca-certificates python3.11 python3.11-venv \
+        git ffmpeg wget curl ca-certificates \
+        python3.11 python3.11-venv python3-pip \
     && ln -s /usr/bin/python3.11 /usr/local/bin/python \
-    && python -m pip install --upgrade pip \
+    && ln -s /usr/bin/python3.11 /usr/bin/python \
+    && python3.11 -m pip install --upgrade pip \
     && rm -rf /var/lib/apt/lists/*
 
 # ===== Python libs (latest stable 4 Jun 2025) =====
