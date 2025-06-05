@@ -29,7 +29,7 @@ ENV TORCH_COMPILE_DISABLE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ffmpeg wget curl ca-certificates \
         build-essential g++ \
-        python3.11 python3.11-venv python3-pip \
+        python3.11 python3.11-dev python3.11-venv python3-pip libasound2-dev \
     && ln -s /usr/bin/python3.11 /usr/local/bin/python \
     && ln -s /usr/bin/python3.11 /usr/bin/python \
     && python3.11 -m pip install --upgrade pip \
