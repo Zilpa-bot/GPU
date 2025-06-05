@@ -28,6 +28,7 @@ ENV TORCH_COMPILE_DISABLE=1 \
 # ===== OS deps =====
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ffmpeg wget curl ca-certificates \
+        build-essential g++ \
         python3.11 python3.11-venv python3-pip \
     && ln -s /usr/bin/python3.11 /usr/local/bin/python \
     && ln -s /usr/bin/python3.11 /usr/bin/python \
