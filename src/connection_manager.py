@@ -25,9 +25,9 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
     
     async def connect(self, websocket: WebSocket, call_control_id: str) -> bool:
-        """Accept a new WebSocket connection and associate it with a call"""
+        """Register a WebSocket connection (already accepted) and associate it with a call"""
         try:
-            await websocket.accept()
+            # Note: WebSocket should already be accepted by the handler
             
             async with self._lock:
                 # Check if we've reached max connections
@@ -76,18 +76,23 @@ class ConnectionManager:
             await self.disconnect(call_control_id)
             return False
     
-    async def send_audio(self, call_control_id: str, audio_data: str, stream_id: str = None) -> bool:
-        """Send audio data to Telnyx via WebSocket"""
+    async def send_audio(self, call_control_id: str, audio_data: str, stream_id: str = None, sequence_number: int = None) -> bool:
+        """Send audio data to Telnyx via WebSocket with proper frame structure"""
         message = {
             "event": "media",
+            "track": "outbound",
             "media": {
-                "payload": audio_data,
-                "track": "outbound"
+                "payload": audio_data
             }
         }
         
+        # Add stream_id if provided
         if stream_id:
             message["stream_id"] = stream_id
+            
+        # Add sequence_number for frame ordering (Telnyx requirement)
+        if sequence_number is not None:
+            message["sequence_number"] = str(sequence_number)
             
         return await self.send_message(call_control_id, message)
     

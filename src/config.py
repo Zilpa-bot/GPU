@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, ConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,8 +13,13 @@ class Settings(BaseSettings):
     telnyx_phone_number: str = Field(..., env="TELNYX_PHONE_NUMBER")
     
     # Google Gemini Configuration
-    gemini_api_key: str = Field(..., env="GEMINI_API_KEY")
-    gemini_model: str = Field("gemini-2.5-flash-lite", env="GEMINI_MODEL")
+    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY")
+    google_ai_api_key: Optional[str] = Field(None, env="GOOGLE_AI_API_KEY")
+    gemini_model: str = Field("models/gemini-2.5-flash-lite-preview-06-17", env="GEMINI_MODEL")
+    
+    # Google Cloud / Vertex AI Configuration
+    google_cloud_project: Optional[str] = Field(None, env="GOOGLE_CLOUD_PROJECT")
+    google_application_credentials: Optional[str] = Field(None, env="GOOGLE_APPLICATION_CREDENTIALS")
     
     # Server Configuration
     host: str = Field("0.0.0.0", env="HOST")
@@ -38,9 +43,11 @@ class Settings(BaseSettings):
         env="SYSTEM_PROMPT"
     )
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"  # Ignore extra environment variables
+    )
 
 
 # Global settings instance

@@ -61,7 +61,7 @@ class MediaStreamMessage(BaseModel):
 
 
 class CallSession(BaseModel):
-    """Active call session data"""
+    """Represents the state of a single call session"""
     call_control_id: str
     call_leg_id: str
     call_session_id: str
@@ -69,9 +69,13 @@ class CallSession(BaseModel):
     to_number: str
     direction: str
     state: str
-    websocket_connection: Optional[Any] = None  # Will store WebSocket connection
     created_at: datetime
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+    websocket_connection: Optional[Any] = None
+    conversation_history: list = []
+    greeted: bool = False
+    speaking: bool = False
+    last_outbound_sequence: int = 0
+    codec: str = "UNKNOWN"  # "UNKNOWN", "OPUS", or "PCMU"
     
     class Config:
         arbitrary_types_allowed = True
@@ -85,12 +89,14 @@ class TelnyxCommand(BaseModel):
 
 
 class AnswerCallCommand(TelnyxCommand):
-    """Answer an incoming call with optional media streaming"""
+    """Answer an incoming call with bidirectional media streaming"""
     command: str = "answer"
     webhook_url: Optional[str] = None
     webhook_url_method: Optional[str] = "POST"
     stream_url: Optional[str] = None
     stream_track: Optional[str] = None  # "inbound", "outbound", or "both_tracks"
+    stream_bidirectional_mode: Optional[str] = "rtp"  # Enable bidirectional streaming
+    stream_bidirectional_codec: Optional[str] = "PCMU"  # Default codec for compatibility
 
 
 class StartStreamCommand(TelnyxCommand):

@@ -6,6 +6,10 @@ Run this script to start the FastAPI server
 
 import sys
 import os
+import warnings
+
+# Suppress specific deprecation warnings from webrtcvad
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
 
 # Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
