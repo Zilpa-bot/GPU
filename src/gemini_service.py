@@ -278,8 +278,8 @@ class GeminiService:
         try:
             logger.info(f"🔧 Converting TTS audio to Telnyx OPUS format ({target_sample_rate}Hz): {len(tts_audio)} bytes")
             
-            # Step 1: Extract PCM data from TTS audio (assuming WAV format)
-            pcm_data = self._extract_pcm_from_audio(tts_audio)
+            # Step 1: Extract PCM data and detect actual sample rate from WAV header
+            pcm_data, detected_rate = self._extract_pcm_with_rate(tts_audio)
             if not pcm_data:
                 logger.error("Failed to extract PCM data from TTS audio")
                 return None
@@ -290,17 +290,15 @@ class GeminiService:
                 logger.error("Failed to ensure little-endian format")
                 return None
             
-            # Step 3: Resample to target rate if needed (proper resampling, not naive downsampling)
-            resampled_pcm = self._resample_audio_to_target_rate(pcm_le, target_sample_rate)
+            # Step 3: Resample to target rate if needed (use detected rate for accurate conversion)
+            resampled_pcm = self._resample_audio_to_target_rate_with_source(pcm_le, detected_rate, target_sample_rate)
             if not resampled_pcm:
                 logger.error(f"Failed to resample audio to {target_sample_rate}Hz")
                 return None
             
-            # Step 4: Normalize audio to prevent clipping (-6 dBFS peak)
-            normalized_pcm = self._normalize_audio(resampled_pcm)
-            if not normalized_pcm:
-                logger.error("Failed to normalize audio")
-                return None
+            # Step 4: Skip normalization temporarily to test if it's causing "noises"
+            logger.debug("🔇 Skipping internal normalization (temporarily disabled for testing)")
+            normalized_pcm = resampled_pcm  # Use resampled audio directly
             
             logger.info(f"✅ Converted to Telnyx OPUS PCM16 format: {len(normalized_pcm)} bytes")
             return normalized_pcm
@@ -314,17 +312,39 @@ class GeminiService:
         try:
             # Check if it's a WAV file
             if len(audio_data) > 44 and audio_data.startswith(b'RIFF'):
-                # Parse WAV header to get correct offset
-                # Standard WAV header is 44 bytes, but let's parse it properly
-                if audio_data[12:16] == b'fmt ':
-                    # Find the data chunk
-                    data_pos = audio_data.find(b'data')
-                    if data_pos > 0:
-                        # Skip 'data' + 4 bytes for chunk size
-                        pcm_start = data_pos + 8
-                        pcm_data = audio_data[pcm_start:]
-                        logger.debug(f"Extracted {len(pcm_data)} bytes PCM from WAV")
-                        return pcm_data
+                logger.debug("Detected WAV format, parsing header...")
+                
+                # Parse WAV header properly to extract sample rate and find PCM data
+                try:
+                    # Read essential WAV header fields
+                    sample_rate = struct.unpack('<I', audio_data[24:28])[0]
+                    bits_per_sample = struct.unpack('<H', audio_data[34:36])[0]
+                    
+                    logger.debug(f"WAV header: {sample_rate}Hz, {bits_per_sample}-bit")
+                    
+                    # Find the data chunk properly
+                    pos = 12  # Start after RIFF header
+                    while pos < len(audio_data) - 8:
+                        chunk_id = audio_data[pos:pos+4]
+                        chunk_size = struct.unpack('<I', audio_data[pos+4:pos+8])[0]
+                        
+                        if chunk_id == b'data':
+                            # Found data chunk
+                            pcm_start = pos + 8
+                            pcm_data = audio_data[pcm_start:pcm_start + chunk_size]
+                            logger.debug(f"Found data chunk: {len(pcm_data)} bytes PCM at {sample_rate}Hz")
+                            return pcm_data
+                        else:
+                            # Skip this chunk
+                            pos += 8 + chunk_size
+                            # Ensure word alignment
+                            if chunk_size % 2:
+                                pos += 1
+                    
+                    logger.warning("No data chunk found in WAV, using fallback")
+                    
+                except struct.error as e:
+                    logger.warning(f"Error parsing WAV header: {e}, using fallback")
                 
                 # Fallback: assume standard 44-byte header
                 pcm_data = audio_data[44:]
@@ -339,6 +359,57 @@ class GeminiService:
             logger.error(f"Error extracting PCM from audio: {e}")
             return None
     
+    def _extract_pcm_with_rate(self, audio_data: bytes) -> Tuple[Optional[bytes], Optional[int]]:
+        """Extract PCM data and sample rate from audio bytes (WAV or raw PCM)"""
+        try:
+            # Check if it's a WAV file
+            if len(audio_data) > 44 and audio_data.startswith(b'RIFF'):
+                logger.debug("Detected WAV format, parsing header for sample rate...")
+                
+                try:
+                    # Read essential WAV header fields
+                    sample_rate = struct.unpack('<I', audio_data[24:28])[0]
+                    bits_per_sample = struct.unpack('<H', audio_data[34:36])[0]
+                    
+                    logger.debug(f"WAV header: {sample_rate}Hz, {bits_per_sample}-bit")
+                    
+                    # Find the data chunk properly
+                    pos = 12  # Start after RIFF header
+                    while pos < len(audio_data) - 8:
+                        chunk_id = audio_data[pos:pos+4]
+                        chunk_size = struct.unpack('<I', audio_data[pos+4:pos+8])[0]
+                        
+                        if chunk_id == b'data':
+                            # Found data chunk
+                            pcm_start = pos + 8
+                            pcm_data = audio_data[pcm_start:pcm_start + chunk_size]
+                            logger.debug(f"Found data chunk: {len(pcm_data)} bytes PCM at {sample_rate}Hz")
+                            return pcm_data, sample_rate
+                        else:
+                            # Skip this chunk
+                            pos += 8 + chunk_size
+                            # Ensure word alignment
+                            if chunk_size % 2:
+                                pos += 1
+                    
+                    logger.warning("No data chunk found in WAV, using fallback")
+                    
+                except struct.error as e:
+                    logger.warning(f"Error parsing WAV header: {e}, using fallback")
+                
+                # Fallback: assume standard 44-byte header and default rate
+                pcm_data = audio_data[44:]
+                logger.debug(f"Extracted {len(pcm_data)} bytes PCM from WAV (fallback)")
+                return pcm_data, 24000  # Default assumption
+            else:
+                # Assume it's already raw PCM at default rate
+                logger.debug(f"Using raw PCM data: {len(audio_data)} bytes")
+                return audio_data, 24000  # Default assumption
+                
+        except Exception as e:
+            logger.error(f"Error extracting PCM from audio: {e}")
+            return None, None
+    
     def _resample_audio_to_target_rate(self, pcm_data: bytes, target_rate: int = 16000) -> Optional[bytes]:
         """Properly resample audio to target rate using interpolation"""
         try:
@@ -346,46 +417,40 @@ class GeminiService:
             samples = struct.unpack(f'<{len(pcm_data)//2}h', pcm_data)
             sample_count = len(samples)
             
-            # Estimate original sample rate based on data size
-            # For a typical TTS response (few seconds), estimate the rate
-            estimated_duration = max(1.0, sample_count / 24000)  # Assume 24kHz initially
-            
-            # Common TTS sample rates: 16kHz, 22kHz, 24kHz, 44.1kHz, 48kHz
-            if sample_count > 48000 * 5:  # More than 5 seconds at 48kHz
-                original_rate = 48000
-            elif sample_count > 44100 * 5:  # More than 5 seconds at 44.1kHz
-                original_rate = 44100
-            elif sample_count > 24000 * 5:  # More than 5 seconds at 24kHz
-                original_rate = 24000
-            elif sample_count > 22050 * 5:  # More than 5 seconds at 22kHz
-                original_rate = 22050
-            elif sample_count > 16000 * 5:  # More than 5 seconds at 16kHz
-                original_rate = 16000
-            else:
-                # Shorter audio or lower rate, assume 16kHz (common for TTS)
-                original_rate = 16000
+            # IMPROVED: Gemini TTS typically outputs at 24kHz, so assume that as default
+            # This is more reliable than guessing based on sample count
+            original_rate = 24000  # Gemini's default TTS output rate
             
             logger.debug(f"Estimated original sample rate: {original_rate}Hz, samples: {sample_count}")
             
             # If already at target rate, return as-is
             if original_rate == target_rate:
+                logger.debug("Audio already at target rate, no resampling needed")
                 return pcm_data
             
             # Calculate resampling ratio
             ratio = original_rate / target_rate
+            logger.debug(f"Resampling ratio: {ratio:.2f} ({original_rate}Hz → {target_rate}Hz)")
             
-            if ratio == 2.0:
-                # Simple 2:1 downsampling with basic anti-aliasing
-                # Apply a simple low-pass filter before downsampling
-                filtered_samples = self._apply_simple_lowpass(samples)
-                downsampled = filtered_samples[::2]  # Take every 2nd sample
-            elif ratio == 3.0:
-                # 3:1 downsampling
+            if abs(ratio - 3.0) < 0.1:  # 24kHz → 8kHz (3:1)
+                # High-quality 3:1 downsampling with anti-aliasing
+                # Apply low-pass filter first to prevent aliasing
                 filtered_samples = self._apply_simple_lowpass(samples)
                 downsampled = filtered_samples[::3]  # Take every 3rd sample
+                logger.debug("Applied 3:1 downsampling with anti-aliasing filter")
+            elif abs(ratio - 1.5) < 0.1:  # 24kHz → 16kHz (3:2)
+                # 3:2 resampling using linear interpolation
+                downsampled = self._linear_resample(samples, original_rate, target_rate)
+                logger.debug("Applied 3:2 resampling using linear interpolation")
+            elif abs(ratio - 2.0) < 0.1:  # For cases like 16kHz → 8kHz
+                # Simple 2:1 downsampling with anti-aliasing
+                filtered_samples = self._apply_simple_lowpass(samples)
+                downsampled = filtered_samples[::2]
+                logger.debug("Applied 2:1 downsampling with anti-aliasing filter")
             else:
                 # Linear interpolation for other ratios
                 downsampled = self._linear_resample(samples, original_rate, target_rate)
+                logger.debug(f"Applied linear interpolation resampling for ratio {ratio:.2f}")
             
             # Convert back to bytes
             resampled_data = struct.pack(f'<{len(downsampled)}h', *downsampled)
@@ -394,7 +459,56 @@ class GeminiService:
             
         except Exception as e:
             logger.error(f"Error resampling audio: {e}")
-            return None
+            # Return original data if resampling fails
+            logger.warning("Resampling failed, returning original audio data")
+            return pcm_data
+    
+    def _resample_audio_to_target_rate_with_source(self, pcm_data: bytes, source_rate: int, target_rate: int) -> Optional[bytes]:
+        """Resample audio from known source rate to target rate"""
+        try:
+            if not source_rate:
+                logger.warning("Source rate unknown, falling back to old method")
+                return self._resample_audio_to_target_rate(pcm_data, target_rate)
+            
+            if source_rate == target_rate:
+                logger.debug(f"Source and target rates match ({source_rate}Hz), no resampling needed")
+                return pcm_data
+            
+            # Convert bytes to 16-bit samples
+            samples = struct.unpack(f'<{len(pcm_data)//2}h', pcm_data)
+            sample_count = len(samples)
+            
+            logger.debug(f"Resampling {sample_count} samples from {source_rate}Hz to {target_rate}Hz")
+            
+            # Calculate resampling ratio
+            ratio = source_rate / target_rate
+            logger.debug(f"Resampling ratio: {ratio:.3f}")
+            
+            if abs(ratio - 1.0) < 0.01:  # Very close to 1:1
+                logger.debug("Ratio close to 1:1, no resampling needed")
+                return pcm_data
+            elif abs(ratio - 2.0) < 0.1:  # 2:1 downsampling
+                filtered_samples = self._apply_simple_lowpass(samples)
+                downsampled = filtered_samples[::2]
+                logger.debug("Applied 2:1 downsampling with anti-aliasing")
+            elif abs(ratio - 3.0) < 0.1:  # 3:1 downsampling
+                filtered_samples = self._apply_simple_lowpass(samples)
+                downsampled = filtered_samples[::3]
+                logger.debug("Applied 3:1 downsampling with anti-aliasing")
+            else:
+                # Linear interpolation for other ratios
+                downsampled = self._linear_resample(samples, source_rate, target_rate)
+                logger.debug(f"Applied linear interpolation for ratio {ratio:.3f}")
+            
+            # Convert back to bytes
+            resampled_data = struct.pack(f'<{len(downsampled)}h', *downsampled)
+            logger.debug(f"Resampled from {len(samples)} to {len(downsampled)} samples")
+            return resampled_data
+            
+        except Exception as e:
+            logger.error(f"Error resampling audio from {source_rate}Hz to {target_rate}Hz: {e}")
+            logger.warning("Resampling failed, returning original audio data")
+            return pcm_data
     
     def _ensure_little_endian(self, pcm_data: bytes) -> Optional[bytes]:
         """
@@ -457,9 +571,9 @@ class GeminiService:
                 logger.warning("Audio contains only silence")
                 return pcm_data
             
-            # Clip to -6 dBFS as recommended in the guide (prevents distortion after companding)
-            # -6 dBFS = 50% of int16 range = 16384 (true -6 dBFS)
-            target_peak = 16384  # -6 dBFS for proper headroom
+            # Don't clip too aggressively - this might be causing the "noises"
+            # Use more conservative peak limiting to preserve audio quality
+            target_peak = 28000  # More conservative than -6 dBFS to preserve quality
             
             # Always apply clipping to prevent over-hot peaks
             clipped_samples = np.clip(samples, -target_peak, target_peak)
@@ -485,6 +599,8 @@ class GeminiService:
                 result_samples = clipped_samples
             
             # Convert back to bytes
+            # CRITICAL FIX: Ensure we're within valid int16 range before conversion
+            result_samples = np.clip(result_samples, -32766, 32766)
             result = result_samples.astype('<i2').tobytes()
             return result
                 
@@ -510,20 +626,33 @@ class GeminiService:
             return pcm_data  # Return original on error
     
     def _apply_simple_lowpass(self, samples):
-        """Apply a simple low-pass filter to reduce aliasing"""
-        if len(samples) < 3:
+        """Apply a simple but effective low-pass filter to reduce aliasing"""
+        if len(samples) < 5:
             return samples
         
-        # Simple 3-point moving average filter
+        # Improved 5-point weighted moving average filter
+        # Weights: [0.1, 0.2, 0.4, 0.2, 0.1] for better frequency response
         filtered = []
-        filtered.append(samples[0])  # First sample unchanged
         
-        for i in range(1, len(samples) - 1):
-            # Average of 3 consecutive samples
-            avg = (samples[i-1] + samples[i] + samples[i+1]) // 3
-            filtered.append(avg)
+        # Handle edge cases
+        filtered.append(samples[0])
+        filtered.append(samples[1])
         
-        filtered.append(samples[-1])  # Last sample unchanged
+        # Apply weighted filter to middle samples
+        for i in range(2, len(samples) - 2):
+            weighted_avg = (
+                samples[i-2] * 0.1 +
+                samples[i-1] * 0.2 +
+                samples[i] * 0.4 +
+                samples[i+1] * 0.2 +
+                samples[i+2] * 0.1
+            )
+            filtered.append(int(weighted_avg))
+        
+        # Handle edge cases
+        filtered.append(samples[-2])
+        filtered.append(samples[-1])
+        
         return filtered
     
     def _linear_resample(self, samples, original_rate, target_rate):
@@ -701,7 +830,7 @@ class GeminiService:
 def normalize_audio_dbfs(audio_data: bytes, target_dbfs: float = -6.0) -> bytes:
     """
     Normalize audio to target dBFS level.
-    Specs: normalise –6 dBFS (not -3 dBFS)
+    DISABLED TEMPORARILY to test if normalization is causing the "noises" issue
     
     Args:
         audio_data: PCM16 audio bytes
@@ -733,6 +862,10 @@ def normalize_audio_dbfs(audio_data: bytes, target_dbfs: float = -6.0) -> bytes:
         normalized = np.clip(normalized, -32767, 32767)
         
         logger.debug(f"🔧 Normalized audio: {current_dbfs:.1f} dBFS → {target_dbfs:.1f} dBFS (gain: {gain_db:+.1f} dB)")
+        
+        # CRITICAL FIX: Ensure we're within valid int16 range before conversion
+        # Some numpy versions fail on exactly -32768 or 32767.0 (float) → int16
+        normalized = np.clip(normalized, -32766, 32766)
         
         return normalized.astype(np.int16).tobytes()
         

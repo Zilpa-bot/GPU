@@ -76,6 +76,7 @@ class CallSession(BaseModel):
     speaking: bool = False
     last_outbound_sequence: int = 0
     codec: str = "UNKNOWN"  # "UNKNOWN", "OPUS", or "PCMU"
+    _welcome_attempts: int = 0  # Initialize to 0 for proper welcome message logic
     
     class Config:
         arbitrary_types_allowed = True
@@ -96,7 +97,8 @@ class AnswerCallCommand(TelnyxCommand):
     stream_url: Optional[str] = None
     stream_track: Optional[str] = None  # "inbound", "outbound", or "both_tracks"
     stream_bidirectional_mode: Optional[str] = "rtp"  # Enable bidirectional streaming
-    stream_bidirectional_codec: Optional[str] = "PCMU"  # Default codec for compatibility
+    stream_bidirectional_codec: Optional[str] = "OPUS"  # Default to OPUS for high quality
+    stream_bidirectional_sampling_rate: Optional[int] = 16000  # 16kHz for OPUS
 
 
 class StartStreamCommand(TelnyxCommand):

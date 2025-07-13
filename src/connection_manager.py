@@ -107,11 +107,13 @@ class ConnectionManager:
             direction=call_data.get("direction", ""),
             state=call_data.get("state", ""),
             created_at=datetime.now(),
-            conversation_history=[]
+            conversation_history=[],
+            _welcome_attempts=0  # Explicitly initialize welcome attempts fix
         )
         
         self.active_sessions[call_control_id] = session
-        logger.info(f"Created session for call {call_control_id}")
+        logger.info(f"🎯 Created session for call {call_control_id} - _welcome_attempts={session._welcome_attempts}")
+        logger.info(f"🔍 SESSION DEBUG: Initial state - greeted={session.greeted}, codec={session.codec}, attempts={session._welcome_attempts}")
         return session
     
     def get_session(self, call_control_id: str) -> Optional[CallSession]:

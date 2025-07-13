@@ -2,6 +2,7 @@ import json
 import base64
 import asyncio
 import logging
+import time
 from typing import Optional, Dict, Any
 import httpx
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
@@ -27,12 +28,13 @@ from .gemini_service import (
     chunk_audio_for_streaming,
     normalize_audio_dbfs
 )
+from .audio_frame_builder import create_audio_frames
 
 logger = logging.getLogger(__name__)
 
 
 class TelnyxHandler:
-    """Handles Telnyx webhook events and WebSocket media streaming"""
+    """Main Telnyx event/websocket handler"""
     
     def __init__(self):
         self.telnyx_api_base = "https://api.telnyx.com/v2"
@@ -40,6 +42,9 @@ class TelnyxHandler:
             "Authorization": f"Bearer {settings.telnyx_api_key}",
             "Content-Type": "application/json"
         }
+        # Cache the greeting audio so Gemini TTS is called only once per process
+        self._cached_greeting_wav: bytes | None = None  # Reset cache to force re-generation
+        self._greeting_written: bool = False
     
     def _construct_stream_url(self, call_control_id: str) -> str:
         """
@@ -238,25 +243,16 @@ class TelnyxHandler:
         session = connection_manager.get_session(call_control_id)
         if session:
             session.websocket_connection = websocket
-            logger.debug(f"�� WebSocket attached to session {call_control_id}")
+            logger.info(f"🔌 WebSocket attached to session {call_control_id}")
+            logger.info(f"🔍 WEBSOCKET SESSION STATE: greeted={session.greeted}, codec={session.codec}, attempts={session._welcome_attempts}")
         else:
             logger.error(f"No session found for {call_control_id} when establishing WebSocket")
         
-        # Initialize audio processor for this call
-        audio_processor = get_audio_processor(call_control_id)
-        audio_processor.set_utterance_callback(self._process_utterance)
+        # Store session info
+        await connection_manager.connect(websocket, call_control_id)
         
-        # Connect the WebSocket to our manager
-        connected = await connection_manager.connect(websocket, call_control_id)
-        if not connected:
-            logger.error(f"Failed to register WebSocket for call {call_control_id}")
-            return
-        
-        # IMMEDIATE WELCOME: Send welcome message right after WebSocket connection
-        # This ensures caller hears something even if Telnyx events are delayed/missing
-        logger.info(f"🎯 WebSocket connected - sending immediate welcome message for call {call_control_id}")
-        await asyncio.sleep(0.5)  # Brief delay to ensure connection is stable
-        await self._send_welcome_message(call_control_id)
+        # NOTE: Welcome message will be sent after codec detection from first media frame
+        # This ensures we know the correct audio format (PCMU/OPUS) before streaming
         
         try:
             while True:
@@ -295,42 +291,15 @@ class TelnyxHandler:
             logger.error(f"No session found for {call_control_id}, cannot process event '{event_type}'.")
             return
 
-        if event_type in ("connected", "start") and not session.greeted:
-            logger.info(f"📡 Media stream started for call {call_control_id}. Sending welcome message.")
-            connection_manager.update_session_state(call_control_id, "media_streaming")
-            await self._send_welcome_message(call_control_id)
-            # NOTE: session.greeted will be set to True only after successfully streaming at least one frame
-        
-        elif event_type == "media":
+        if event_type == "media":
             # Debug logging to understand welcome message flow
-            attempts = getattr(session, '_welcome_attempts', 0)
-            logger.debug(
-                f"🔍 Processing media event: greeted={session.greeted}, attempts={attempts}, codec={session.codec}"
-            )
-
-            # If codec is now known and greeting not yet succeeded, attempt up to 2 times
-            if session.codec != "UNKNOWN" and not session.greeted:
-                if attempts < 2:
-                    logger.info(
-                        f"📡 Attempt {attempts + 1}: sending welcome message for {call_control_id} (codec={session.codec})"
-                    )
-                    session._welcome_attempts = attempts + 1
-                    await self._send_welcome_message(call_control_id)
-                else:
-                    logger.warning(
-                        f"⚠️ Welcome message already attempted {attempts} times for {call_control_id} without success. Skipping further attempts."
-                    )
-            else:
-                logger.debug(
-                    f"🔍 Skipping welcome: greeted={session.greeted}, attempts={attempts}"
-                )
-
-            payload_b64 = message_data.get('media', {}).get('payload')
-            if not payload_b64:
-                return
-
+            attempts = session._welcome_attempts
+            logger.info(f"🔍 MEDIA EVENT: greeted={session.greeted}, attempts={attempts}, codec={session.codec}")
+            logger.info(f"🔍 WELCOME CONDITION: codec_known={session.codec != 'UNKNOWN'}, not_greeted={not session.greeted}, attempts_zero={attempts == 0}")
+             
             # Codec detection on the first inbound media frame
-            if session.codec == "UNKNOWN" and message_data.get('media', {}).get('track') == 'inbound':
+            payload_b64 = message_data.get('media', {}).get('payload')
+            if payload_b64 and session.codec == "UNKNOWN" and message_data.get('media', {}).get('track') == 'inbound':
                 try:
                     decoded_payload = base64.b64decode(payload_b64)
                     frame_size = len(decoded_payload)
@@ -346,13 +315,65 @@ class TelnyxHandler:
                 except Exception as e:
                     logger.error(f"Error decoding payload for codec detection: {e}")
 
-            # Route to the audio processor
-            audio_processor = get_audio_processor(call_control_id)
-            await audio_processor.process_media_message(message_data)
+            # Send welcome message immediately after codec detection (fixed logic)
+            if session.codec != "UNKNOWN" and not session.greeted and attempts == 0:
+                logger.info(f"📡 Sending welcome message for {call_control_id} (codec={session.codec})")
+                logger.info(f"🔍 MEDIA EVENT: Setting _welcome_attempts = 1")
+                session._welcome_attempts = 1
+                try:
+                    await self._send_welcome_message(call_control_id)
+                    logger.info(f"✅ Welcome message sent successfully for {call_control_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send welcome message for {call_control_id}: {e}")
+                    # Reset attempts so we can try again
+                    logger.info(f"🔍 MEDIA EVENT: Resetting _welcome_attempts = 0 due to error")
+                    session._welcome_attempts = 0
+
+            # Process the media payload for audio processing
+            if payload_b64:
+                # Route to the audio processor
+                audio_processor = get_audio_processor(call_control_id)
+                await audio_processor.process_media_message(message_data)
 
         elif event_type == "stop":
             logger.info(f"⏹️ Media stream stopped for call {call_control_id}")
             connection_manager.update_session_state(call_control_id, "media_stopped")
+        
+        elif event_type == "connected":
+            logger.info(f"🔗 Media stream connected for call {call_control_id}")
+            logger.info(f"🔍 CONNECTED EVENT: _welcome_attempts BEFORE = {session._welcome_attempts}")
+            
+            # Extract codec from connected event
+            stream_params = message_data.get('connected', {}).get('stream_params', {})
+            codec = stream_params.get('codec', 'UNKNOWN')
+            
+            if codec != 'UNKNOWN':
+                session.codec = codec
+                logger.info(f"✅ Codec detected from connected event: {codec}")
+            else:
+                logger.warning(f"⚠️ Connected event did not contain codec information")
+                # Default to PCMU since it's most common for phone calls
+                session.codec = "PCMU"
+                logger.info(f"🎯 Defaulting to PCMU codec for welcome message")
+            
+            # Send welcome message immediately - don't wait!
+            if not session.greeted and session._welcome_attempts == 0:
+                logger.info(f"📡 Sending welcome message immediately for {call_control_id} (codec={session.codec})")
+                logger.info(f"🔍 CONNECTED EVENT: Setting _welcome_attempts = 1")
+                session._welcome_attempts = 1
+                try:
+                    await self._send_welcome_message(call_control_id)
+                    logger.info(f"✅ Welcome message sent successfully for {call_control_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send welcome message for {call_control_id}: {e}")
+                    # Reset attempts so we can try again
+                    logger.info(f"🔍 CONNECTED EVENT: Resetting _welcome_attempts = 0 due to error")
+                    session._welcome_attempts = 0
+            else:
+                logger.info(f"🔍 CONNECTED EVENT: Welcome condition failed - greeted={session.greeted}, attempts={session._welcome_attempts}")
+            
+            logger.info(f"🔍 CONNECTED EVENT: _welcome_attempts AFTER = {session._welcome_attempts}")
+        
         else:
             logger.debug(f"Ignoring media event '{event_type}' for call {call_control_id}")
     
@@ -507,7 +528,11 @@ class TelnyxHandler:
             # ... existing error handling ...
 
     async def _stream_audio_to_caller(self, call_control_id: str, audio_data: bytes):
-        """Chunks and streams audio data to the caller, respecting the negotiated codec."""
+        """
+        Stream audio data to the caller using robust frame preparation.
+        
+        Following kill-the-noise playbook step 5: WebSocket send step (C)
+        """
         session = connection_manager.get_session(call_control_id)
         if not session or not session.websocket_connection:
             logger.error(f"No active WebSocket session for call {call_control_id} to stream audio.")
@@ -515,59 +540,65 @@ class TelnyxHandler:
 
         frames_sent = 0
         try:
-            # Determine chunk size and format based on the detected codec
-            if session.codec == "OPUS":
-                chunk_size = 640  # 20ms of 16kHz 16-bit PCM
-                sleep_interval = 0.02
-                audio_to_send = audio_data
-            elif session.codec == "PCMU":
-                chunk_size = 160  # 20ms of 8kHz 8-bit µ-law
-                sleep_interval = 0.02
-                logger.info("Converting TTS audio from L16/16kHz to µ-law/8kHz for PCMU stream.")
-                audio_to_send = linear_to_ulaw(audio_data)
-            else:
-                logger.error(f"Cannot stream audio: unknown codec '{session.codec}' for call {call_control_id}.")
+            logger.info(f"🎵 Starting audio stream for {call_control_id}: {len(audio_data)} bytes, codec={session.codec}")
+
+            # Handle unknown codec with fallback
+            target_codec = session.codec
+            if target_codec == "UNKNOWN":
+                logger.warning(f"⚠️ Unknown codec detected for {call_control_id}, defaulting to OPUS")
+                target_codec = "OPUS"  # Default to OPUS for better quality
+                session.codec = "OPUS"
+
+            # Prepare frames using the robust audio frame builder
+            b64_frames = create_audio_frames(audio_data, target_codec)
+            if not b64_frames:
+                logger.error(f"❌ Failed to prepare audio frames for {target_codec} codec")
                 return
 
-            if not audio_to_send:
-                logger.error("Audio data is empty after codec conversion, cannot stream.")
-                return
-
-            # Hardening: Assert that we're not sending µ-law silence when we think it's PCM
-            if session.codec == "OPUS":
-                assert not audio_to_send.startswith(b'\xff\xff'), "CRITICAL: µ-law silence detected in OPUS stream!"
+            logger.info(f"✅ Prepared {len(b64_frames)} frames for {target_codec} streaming")
 
             # Set speaking flag only while actively streaming frames
             session.speaking = True
-            logger.info(f"🎤 AI started speaking for call {call_control_id}. Codec: {session.codec}")
+            logger.info(f"🎤 AI started speaking for call {call_control_id}. Codec: {target_codec}")
 
-            # Stream the audio in chunks
-            for i in range(0, len(audio_to_send), chunk_size):
-                chunk = audio_to_send[i:i+chunk_size]
-                if len(chunk) < chunk_size:
-                    # Pad the last chunk if necessary
-                    if session.codec == "PCMU":
-                        chunk += b'\xff' * (chunk_size - len(chunk)) # µ-law silence
-                    else:
-                        chunk += b'\x00' * (chunk_size - len(chunk)) # PCM silence
+            # Following playbook step 5: WebSocket send step (C)
+            # Stream frames with proper sequence numbering and 20ms pacing
+            seq = 0
+            start_time = time.perf_counter()
+            
+            for b64_payload in b64_frames:
+                # Playbook step 6: Runtime probes - log first frame stats
+                if seq == 0:
+                    decoded_frame = base64.b64decode(b64_payload)
+                    logger.info(f"🔍 First frame len={len(decoded_frame)} bytes")
+                    logger.info(f"🔍 First 8 decoded samples = {list(decoded_frame[:16])}")
                 
-                payload = base64.b64encode(chunk).decode('ascii')
-                session.last_outbound_sequence += 1
-                
+                # Playbook step 5: Exact message structure
                 media_message = {
                     "event": "media",
                     "track": "outbound",
-                    "media": {"payload": payload}
+                    "sequence_number": str(seq),
+                    "media": {"payload": b64_payload}
                 }
+                
                 await session.websocket_connection.send_json(media_message)
                 frames_sent += 1
+                seq += 1
                 
                 # Set session.greeted = True only after successfully streaming at least one frame
                 if frames_sent == 1 and not session.greeted:
                     session.greeted = True
                     logger.info(f"✅ Successfully sent first audio frame - session greeted for {call_control_id}")
                 
-                await asyncio.sleep(sleep_interval)  # 20ms pace
+                # Playbook step 5: Precise 20ms pacing - account for processing time
+                elapsed = time.perf_counter() - start_time
+                target_time = seq * 0.02  # Each frame should be at 20ms intervals
+                sleep_time = target_time - elapsed
+                
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                elif sleep_time < -0.01:  # More than 10ms behind
+                    logger.warning(f"⚠️ Frame pacing falling behind: {sleep_time*1000:.1f}ms")
 
             logger.info(f"🎤 AI finished speaking for call {call_control_id}. Sent {frames_sent} frames.")
 
@@ -583,48 +614,101 @@ class TelnyxHandler:
         session = connection_manager.get_session(call_control_id)
         if not session:
             logger.error(f"No session found for {call_control_id}, cannot send welcome message.")
-            return
+            raise ValueError(f"No session found for {call_control_id}")
 
+        logger.info(f"🎯 Starting welcome message generation for {call_control_id}")
+        
         try:
-            logger.info(f"🗣️ Generating Hebrew welcome message for call {call_control_id}")
-            
-            # Generate Hebrew welcome message
             welcome_text = "שלום וברוכים הבאים לקצבייה שלנו בנתניה. איך אני יכול לעזור לכם היום?"
-            welcome_audio = hebrew_text_to_speech(welcome_text)
-            
-            # Log when hebrew_text_to_speech() returns 0-bytes and retry once
-            if not welcome_audio:
-                logger.warning(f"⚠️ hebrew_text_to_speech() returned 0 bytes for welcome message. Retrying once...")
+
+            # Use cached greeting audio if available, otherwise call Gemini once
+            if self._cached_greeting_wav is None:
+                logger.info("🔄 No cached greeting – generating via Gemini TTS …")
                 welcome_audio = hebrew_text_to_speech(welcome_text)
-                
+                logger.info(f"🔍 TTS returned: {type(welcome_audio)}, length: {len(welcome_audio) if welcome_audio else 'None'}")
+
+                # Cache only if we received actual audio
+                if welcome_audio:
+                    self._cached_greeting_wav = welcome_audio
+                    logger.info("💾 Cached greeting audio for future use")
+                else:
+                    logger.error("🚨 TTS returned empty audio - cannot proceed")
+                    raise ValueError("TTS returned empty audio")
+            else:
+                logger.info("💾 Using cached greeting audio (Gemini not called)")
+                welcome_audio = self._cached_greeting_wav
                 if not welcome_audio:
-                    logger.error(f"🚨 hebrew_text_to_speech() failed twice for welcome message. Using silence frame fallback.")
-                    # Generate a short silence frame so the pipeline clears the speaking flag
-                    # Fix overflow issue: Create proper 16-bit PCM silence (not raw zeros)
-                    # 0.5 seconds of 16kHz PCM16 silence = 8000 samples × 2 bytes = 16000 bytes
-                    import struct
-                    silence_samples = [0] * 8000  # 0.5 seconds at 16kHz
-                    welcome_audio = struct.pack('<' + 'h' * len(silence_samples), *silence_samples)
-                    logger.info(f"💭 Generated proper PCM16 silence frame fallback: {len(welcome_audio)} bytes")
+                    logger.error("Cached greeting audio is empty – cannot send welcome message")
+                    raise ValueError("Cached greeting audio is empty")
             
-            if welcome_audio:
+            logger.info(f"🔍 Welcome audio status: {type(welcome_audio)}, length: {len(welcome_audio) if welcome_audio else 'None'}")
+            
+            if welcome_audio and len(welcome_audio) > 44:  # Ensure it's more than just a WAV header
                 logger.info(f"✅ Generated welcome TTS: {len(welcome_audio)} bytes")
                 
-                # Normalize and stream the welcome message
-                normalized_audio = normalize_audio_dbfs(welcome_audio, target_dbfs=-6.0)
-                await self._stream_audio_to_caller(call_control_id, normalized_audio)
+                # --- NEW: persist greeting to WAV for offline listening ---
+                try:
+                    from datetime import datetime
+                    from pathlib import Path
+                    from src.gemini_service import get_gemini_service
+
+                    # Sanitize call_control_id for filesystem (keep alnum & dash)
+                    safe_id = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in call_control_id)
+                    if not self._greeting_written:
+                        path = Path("greeting.wav")
+                        # Ensure audio_to_write defined below
+                    else:
+                        path = None
+
+                    if path is not None:
+                        # Ensure audio_to_write defined below
+                        audio_to_write = welcome_audio
+                        if not welcome_audio.startswith(b'RIFF'):
+                            service = get_gemini_service()
+                            audio_to_write = service._convert_pcm_to_wav(welcome_audio, sample_rate=16000)
+
+                        if not audio_to_write:
+                            raise ValueError("TTS returned empty audio data – nothing to write")
+
+                        path.write_bytes(audio_to_write)
+
+                        size = path.stat().st_size
+                        if size <= 44:
+                            logger.warning(f"Greeting WAV written but contains no audio data (size={size}).")
+                        else:
+                            logger.info(f"💾 Saved greeting WAV to {path.resolve()} ({size} bytes)")
+                        self._greeting_written = True
+                except Exception as wav_err:
+                    logger.warning(f"Failed to persist greeting WAV: {wav_err}")
+
+                            # First normalize the raw PCM audio (before WAV conversion)
+            logger.info(f"🔧 Normalizing audio for streaming...")
+            normalized_audio = normalize_audio_dbfs(welcome_audio, target_dbfs=-6.0)
+            logger.info(f"🔧 Normalized audio: {len(normalized_audio)} bytes")
+            
+            # Then ensure audio is in WAV format for streaming
+            if not normalized_audio.startswith(b'RIFF'):
+                logger.info(f"🔧 Converting normalized PCM to WAV format for streaming...")
+                from .gemini_service import get_gemini_service
+                service = get_gemini_service()
+                normalized_audio = service._convert_pcm_to_wav(normalized_audio, sample_rate=16000)
+                logger.info(f"🔧 Converted to WAV format: {len(normalized_audio)} bytes")
+            
+            logger.info(f"📡 Streaming welcome message to caller...")
+            await self._stream_audio_to_caller(call_control_id, normalized_audio)
+            
+            logger.info(f"📝 Recording welcome interaction...")
+            # Record the interaction
+            connection_manager.add_conversation_entry(
+                call_control_id, 
+                "assistant", 
+                welcome_text
+            )
                 
-                # Record the interaction
-                connection_manager.add_conversation_entry(
-                    call_control_id, 
-                    "assistant", 
-                    welcome_text
-                )
-            else:
-                logger.error(f"❌ Failed to generate any audio for welcome message (call {call_control_id})")
-                
+            logger.info(f"✅ Welcome message completed successfully for {call_control_id}")
         except Exception as e:
             logger.error(f"Error sending welcome message for call {call_control_id}: {e}")
+            raise
     
     async def _process_incoming_audio(self, call_control_id: str, message: MediaStreamMessage):
         """Process incoming audio from the caller"""

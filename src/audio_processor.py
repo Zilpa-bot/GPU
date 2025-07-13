@@ -97,37 +97,58 @@ def linear_to_ulaw(pcm_data: bytes) -> bytes:
         logger.warning("audioop not found. Using robust numpy fallback for PCM -> µ-law encoding.")
         import numpy as np
         
-        samples_16k = np.frombuffer(pcm_data, dtype=np.int16)
-        
-        # Downsample to 8kHz by taking every other sample
-        samples_8k = samples_16k[::2]
-        
-        # This is a standard, robust algorithm for PCM to µ-law conversion.
-        # It's based on industry-standard C implementations (e.g., SoX).
-        BIAS = 0x84  # Bias value for µ-law compression
-        
-        # Get the sign bit and the absolute value
-        sign = np.bitwise_and(samples_8k, 0x8000)
-        abs_val = np.abs(samples_8k)
-        
-        # Add the bias and clip to the max 16-bit value
-        biased = np.add(abs_val, BIAS)
-        clipped = np.clip(biased, 0, 0x7FFF)
-        
-        # Find the segment (exponent) for each sample
-        # This determines the compression level for the sample's magnitude
-        segment = np.searchsorted(
-            np.array([0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000, 0x4000], dtype=np.int16), 
-            clipped
-        )
-        
-        # Calculate the final µ-law byte
-        # This combines the sign, exponent, and mantissa into a single byte
-        ulaw_byte = np.bitwise_or(sign >> 8, segment << 4)
-        ulaw_byte = np.bitwise_or(ulaw_byte, (clipped >> (segment + 4)) & 0x0F)
-        
-        # Invert the bits as per the standard
-        return (~ulaw_byte.astype(np.uint8)).tobytes()
+        try:
+            # Convert bytes to samples using int32 to prevent overflow
+            samples_16k = np.frombuffer(pcm_data, dtype=np.int16).astype(np.int32)
+            
+            # Downsample to 8kHz by taking every other sample
+            samples_8k = samples_16k[::2]
+            
+            # CRITICAL FIX: Clip samples to prevent abs(-32768) overflow
+            # Convert to int32 first to handle the calculation safely
+            samples_8k = np.clip(samples_8k, -32767, 32767)
+            
+            logger.debug(f"µ-law encoding: input {len(samples_16k)} samples → {len(samples_8k)} samples, range: {np.min(samples_8k)} to {np.max(samples_8k)}")
+            
+            # This is a standard, robust algorithm for PCM to µ-law conversion.
+            # It's based on industry-standard C implementations (e.g., SoX).
+            BIAS = 0x84  # Bias value for µ-law compression
+            
+            # Get the sign bit (work with int32 to avoid overflow)
+            sign = np.where(samples_8k < 0, 0x80, 0x00)
+            
+            # Get absolute value safely (no overflow since we clipped to ±32767)
+            abs_val = np.abs(samples_8k)
+            
+            # Add the bias and clip to the max 16-bit value
+            biased = np.add(abs_val, BIAS)
+            clipped = np.clip(biased, 0, 0x7FFF)
+            
+            # Find the segment (exponent) for each sample
+            # This determines the compression level for the sample's magnitude
+            segment = np.searchsorted(
+                np.array([0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000, 0x4000], dtype=np.int32), 
+                clipped
+            )
+            
+            # Calculate the final µ-law byte
+            # This combines the sign, exponent, and mantissa into a single byte
+            ulaw_byte = sign | (segment << 4)
+            mantissa = (clipped >> (segment + 4)) & 0x0F
+            ulaw_byte = ulaw_byte | mantissa
+            
+            # Invert the bits as per the standard and ensure uint8
+            result = (~ulaw_byte) & 0xFF
+            return result.astype(np.uint8).tobytes()
+            
+        except Exception as e:
+            logger.error(f"Error in numpy µ-law conversion: {e}")
+            logger.error(f"Input data size: {len(pcm_data)}, dtype: {type(pcm_data)}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            # Return silence as fallback
+            silence_frames = len(pcm_data) // 4  # 8kHz has half the samples of 16kHz
+            return b'\xff' * silence_frames
 
 
 class AudioBuffer:
@@ -225,7 +246,9 @@ class AudioBuffer:
                 
                 # Calculate RMS energy
                 rms_energy = np.sqrt(np.mean(samples.astype(np.float32) ** 2))
-                energy_threshold = 50.0  # Minimum energy for non-silence
+                # Lowered from 50 → 12 based on empirical phone-line levels.
+                # Telnyx μ-law speech often measures 20-40 RMS after decoding, so 50 was too strict.
+                energy_threshold = 12.0  # Minimum energy for non-silence
                 
                 logger.debug(f"🔊 Frame energy: {rms_energy:.1f} (threshold: {energy_threshold})")
                 
@@ -358,6 +381,10 @@ class AudioProcessor:
         self.is_active = True
         
         logger.info(f"🎤 Audio processor initialized for call {call_control_id} - VAD aggressiveness=1, 600ms silence threshold")
+
+        # Buffers for incoming raw codec frames that may arrive fragmented
+        self._pcmu_buffer = bytearray()  # 8 kHz μ-law, 20 ms ⇒ 160 B
+        self._opus_buffer = bytearray()  # 16 kHz PCM/OPUS passthrough, 20 ms ⇒ 640 B
     
     def set_utterance_callback(self, callback):
         """Set callback function for when utterances are detected"""
@@ -370,16 +397,25 @@ class AudioProcessor:
         if not session:
             return
 
+        # Detect codec from media message if not already known
+        media_data = message_data.get('media', {})
+        if session.codec == "UNKNOWN" and media_data:
+            # Try to detect codec from Telnyx media frame
+            detected_codec = media_data.get('codec', 'UNKNOWN')
+            if detected_codec != 'UNKNOWN':
+                session.codec = detected_codec
+                logger.info(f"🔍 Detected codec from media frame: {detected_codec}")
+
         # Pause VAD during playback to prevent self-barge-in
         if session.speaking:
             logger.debug(f"🔇 Skipping VAD processing - AI is speaking.")
             return
 
-        # Skip processing if codec is not yet determined
+        # Skip processing if codec is still not determined
         if session.codec == "UNKNOWN":
+            logger.debug(f"⏳ Codec still unknown, skipping frame processing")
             return
 
-        media_data = message_data.get('media', {})
         track = media_data.get('track', 'inbound')
         if track != 'inbound':
             return
@@ -390,39 +426,50 @@ class AudioProcessor:
 
         try:
             audio_bytes = base64.b64decode(payload)
-            logger.debug(f"Received {len(audio_bytes)} bytes on {session.codec} track.")
+            logger.debug(f"Received {len(audio_bytes)} raw bytes on {session.codec} track (may be fragmented)")
 
-            pcm_16khz_audio = None
             if session.codec == "OPUS":
-                if len(audio_bytes) == 640:
-                    pcm_16khz_audio = audio_bytes
-                else:
-                    logger.warning(f"Incorrect frame size for OPUS: {len(audio_bytes)} bytes.")
-            
+                # Re-assemble 640-byte 20 ms frames
+                FRAME_SIZE = 640
+                self._opus_buffer.extend(audio_bytes)
+                while len(self._opus_buffer) >= FRAME_SIZE:
+                    frame = bytes(self._opus_buffer[:FRAME_SIZE])
+                    del self._opus_buffer[:FRAME_SIZE]
+
+                    pcm_16khz_audio = frame  # Already 16 kHz PCM16 per Telnyx OPUS stream settings
+
+                    await self._push_pcm_to_vad(pcm_16khz_audio)
+
             elif session.codec == "PCMU":
-                if len(audio_bytes) == 160:
-                    pcm_8khz = ulaw_to_linear(audio_bytes)
+                # Re-assemble 160-byte 20 ms μ-law frames
+                FRAME_SIZE = 160
+                self._pcmu_buffer.extend(audio_bytes)
+                while len(self._pcmu_buffer) >= FRAME_SIZE:
+                    ulaw_frame = bytes(self._pcmu_buffer[:FRAME_SIZE])
+                    del self._pcmu_buffer[:FRAME_SIZE]
+
+                    pcm_8khz = ulaw_to_linear(ulaw_frame)
                     pcm_16khz_audio = upsample_8khz_to_16khz(pcm_8khz)
-                else:
-                    logger.warning(f"Incorrect frame size for PCMU: {len(audio_bytes)} bytes.")
 
-            if pcm_16khz_audio:
-                # Log first 10 decoded samples for quality check
-                try:
-                    import numpy as np
-                    samples = np.frombuffer(pcm_16khz_audio, dtype=np.int16)
-                    logger.debug(f"Inbound samples (first 10): {samples[:10]}")
-                except ImportError:
-                    logger.debug("Numpy not found, skipping sample logging.")
-
-                utterance = self.audio_buffer.process_audio_frame(pcm_16khz_audio)
-                if utterance:
-                    logger.info(f"🎤 VAD detected complete 16kHz utterance: {len(utterance)} bytes")
-                    if self.utterance_callback:
-                        await self.utterance_callback(self.call_control_id, utterance)
+                    await self._push_pcm_to_vad(pcm_16khz_audio)
         except Exception as e:
             logger.error(f"Error processing media message: {e}")
-            
+
+    async def _push_pcm_to_vad(self, pcm_16khz_audio: bytes):
+        """Helper: send a fully-formed 16 kHz PCM20 ms frame to the VAD pipeline."""
+        # Log first 10 decoded samples for quick QA
+        try:
+            import numpy as np
+            samples = np.frombuffer(pcm_16khz_audio, dtype=np.int16)
+            logger.debug(f"Inbound samples (first 10): {samples[:10]}")
+        except ImportError:
+            pass
+
+        utterance = self.audio_buffer.process_audio_frame(pcm_16khz_audio)
+        if utterance and self.utterance_callback:
+            logger.info(f"🎤 VAD detected complete 16kHz utterance: {len(utterance)} bytes")
+            await self.utterance_callback(self.call_control_id, utterance)
+    
     def _convert_audio_format(self, audio_bytes: bytes) -> bytes:
         # This function is now effectively deprecated by the dual-pipeline logic
         # but is kept to avoid breaking other parts of the code that might reference it.
