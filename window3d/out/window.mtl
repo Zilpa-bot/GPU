@@ -1,0 +1,101 @@
+# PBR (PBR extensions: Pr roughness, Pm metallic, norm normal map)
+
+newmtl alu_frame
+Kd 0.1320 0.1435 0.1525
+Ks 0.5 0.5 0.5
+Pr 0.4269
+Pm 0.3303
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl alu_slat
+Kd 0.2023 0.2169 0.2283
+Ks 0.5 0.5 0.5
+Pr 0.3949
+Pm 0.3510
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl lath_vented
+Kd 0.2386 0.2559 0.2694
+Ks 0.5 0.5 0.5
+Pr 0.3949
+Pm 0.3510
+map_Kd textures/slat_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+map_d textures/slat_basecolor.png
+
+newmtl lath_solid
+Kd 0.2386 0.2559 0.2694
+Ks 0.5 0.5 0.5
+Pr 0.3949
+Pm 0.3510
+map_Kd textures/slat_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl handle
+Kd 0.0245 0.0266 0.0289
+Ks 0.5 0.5 0.5
+Pr 0.3308
+Pm 0.2065
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl guide
+Kd 0.0463 0.0510 0.0542
+Ks 0.5 0.5 0.5
+Pr 0.5549
+Pm 0.2581
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl seal
+Kd 0.0074 0.0079 0.0085
+Ks 0.5 0.5 0.5
+Pr 0.9605
+Pm 0.0000
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl dark_recess
+Kd 0.0046 0.0051 0.0055
+Ks 0.5 0.5 0.5
+Pr 0.9071
+Pm 0.0000
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl iron
+Kd 0.1525 0.1714 0.1916
+Ks 0.5 0.5 0.5
+Pr 0.4909
+Pm 0.5677
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl plaster
+Kd 0.8536 0.8371 0.8045
+Ks 0.5 0.5 0.5
+Pr 0.9818
+Pm 0.0000
+map_Kd textures/detail_basecolor.png
+norm textures/detail_normal.png
+map_Pr textures/detail_orm.png
+
+newmtl glass
+Kd 0.4252 0.5070 0.5383
+Ks 0.5 0.5 0.5
+Pr 0.0427
+Pm 0.0000
+map_Kd textures/detail_basecolor.png
+d 0.16
+Ni 1.52

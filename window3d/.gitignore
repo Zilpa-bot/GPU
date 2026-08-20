@@ -1,0 +1,5 @@
+out/shots/
+out/diag/
+out/viewer.html
+node_modules
+__pycache__/
