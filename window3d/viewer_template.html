@@ -1,50 +1,140 @@
-<title>Window — Photo to 3D</title>
+<title>Anthracite Slider</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+  /* Palette: cool graphite neutrals borrowed from the anodised extrusion,
+     with a single daylight-ochre accent echoing the sun through the vents. */
   :root{
-    --bg:#f4f3f0; --panel:#ffffffcc; --ink:#1b1c1e; --muted:#5d6166;
-    --line:#00000018; --accent:#3f6ea8;
+    --ground:#e8eaed;
+    --plate:rgba(255,255,255,.82);
+    --line:rgba(22,25,29,.12);
+    --line-soft:rgba(22,25,29,.07);
+    --ink:#16191d;
+    --ink-2:#596069;
+    --ink-3:#828a93;
+    --accent:#8a6512;
+    --accent-ink:#ffffff;
+    --shadow:0 1px 2px rgba(16,20,24,.10), 0 8px 24px rgba(16,20,24,.10);
   }
-  :root:not([data-theme="light"]){}
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
-      --bg:#101113; --panel:#1b1d20cc; --ink:#eceef0; --muted:#9aa0a6;
-      --line:#ffffff1f; --accent:#7fb0e8;
+      --ground:#0e1114;
+      --plate:rgba(23,27,32,.82);
+      --line:rgba(232,235,238,.14);
+      --line-soft:rgba(232,235,238,.08);
+      --ink:#e8ebee;
+      --ink-2:#98a1aa;
+      --ink-3:#6d767f;
+      --accent:#e6b455;
+      --accent-ink:#14171a;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.42);
     }
   }
   :root[data-theme="dark"]{
-    --bg:#101113; --panel:#1b1d20cc; --ink:#eceef0; --muted:#9aa0a6;
-    --line:#ffffff1f; --accent:#7fb0e8;
+    --ground:#0e1114;
+    --plate:rgba(23,27,32,.82);
+    --line:rgba(232,235,238,.14);
+    --line-soft:rgba(232,235,238,.08);
+    --ink:#e8ebee;
+    --ink-2:#98a1aa;
+    --ink-3:#6d767f;
+    --accent:#e6b455;
+    --accent-ink:#14171a;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.42);
   }
+
   html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
-    font:14px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  body{
+    margin:0; background:var(--ground); color:var(--ink); overflow:hidden;
+    font:400 14px/1.5 Archivo,ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
   #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
-  .panel{position:fixed;background:var(--panel);backdrop-filter:blur(10px);
-    border:1px solid var(--line);border-radius:12px;padding:10px 12px}
-  #hud{top:14px;left:14px;max-width:min(320px,44vw)}
-  #hud h1{margin:0 0 2px;font-size:15px;font-weight:650;letter-spacing:-.01em}
-  #hud p{margin:0;color:var(--muted);font-size:12px}
-  #views{bottom:14px;left:14px;display:flex;gap:6px;flex-wrap:wrap;max-width:min(560px,92vw)}
-  button{font:inherit;font-size:12px;color:var(--ink);background:transparent;
-    border:1px solid var(--line);border-radius:999px;padding:5px 11px;cursor:pointer}
-  button:hover{border-color:var(--accent);color:var(--accent)}
-  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
-  #opts{bottom:14px;right:14px;display:grid;gap:4px;font-size:12px;color:var(--muted)}
-  #opts label{display:flex;gap:7px;align-items:center;cursor:pointer}
-  #tip{position:fixed;top:14px;right:14px;color:var(--muted);font-size:11px;
-    text-align:right;pointer-events:none}
-  #err{position:fixed;inset:auto 14px 14px 14px;color:#c0392b;font-size:12px}
-  @media (max-width:640px){ #opts{display:none} #hud{max-width:60vw} }
+
+  .plate{
+    position:fixed; background:var(--plate); color:var(--ink);
+    backdrop-filter:blur(14px) saturate(1.1);
+    -webkit-backdrop-filter:blur(14px) saturate(1.1);
+    border:1px solid var(--line); border-radius:4px; box-shadow:var(--shadow);
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:9.5px; font-weight:500; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--ink-3);
+  }
+
+  /* spec plate ------------------------------------------------------- */
+  #spec{top:16px; left:16px; padding:12px 15px 11px; max-width:min(340px,52vw)}
+  #spec h1{
+    margin:5px 0 0; font-size:17px; font-weight:600; letter-spacing:-.015em;
+    line-height:1.2; text-wrap:balance;
+  }
+  #spec .rule{height:1px;background:var(--line-soft);margin:9px 0 8px}
+  #spec dl{
+    margin:0; display:grid; grid-template-columns:auto 1fr; gap:2px 14px;
+    font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:11px; font-variant-numeric:tabular-nums; color:var(--ink-2);
+  }
+  #spec dt{color:var(--ink-3)}
+  #spec dd{margin:0; text-align:right; color:var(--ink)}
+
+  /* camera rail ------------------------------------------------------ */
+  #views{bottom:16px; left:16px; padding:11px 13px 12px; display:grid; gap:9px;
+         max-width:min(600px,calc(100vw - 32px))}
+  .rail{display:grid; gap:6px}
+  .chips{display:flex; gap:5px; flex-wrap:wrap}
+  button{
+    font:inherit; font-size:12.5px; color:var(--ink-2); background:transparent;
+    border:1px solid var(--line); border-radius:3px; padding:4px 10px;
+    cursor:pointer; transition:color .12s, border-color .12s, background-color .12s;
+  }
+  button:hover{color:var(--ink); border-color:var(--ink-3)}
+  button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  button[aria-pressed="true"]{
+    background:var(--accent); border-color:var(--accent); color:var(--accent-ink);
+  }
+
+  /* layer panel ------------------------------------------------------ */
+  #opts{bottom:16px; right:16px; padding:11px 14px 12px; display:grid; gap:7px}
+  #opts .list{display:grid; gap:5px}
+  #opts label{
+    display:flex; gap:9px; align-items:center; cursor:pointer;
+    font-size:12.5px; color:var(--ink-2);
+  }
+  #opts label:hover{color:var(--ink)}
+  #opts input{accent-color:var(--accent); width:13px; height:13px; margin:0}
+  #opts input:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  #tip{
+    position:fixed; top:18px; right:18px; text-align:right; pointer-events:none;
+    font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:10.5px; letter-spacing:.03em; color:var(--ink-3);
+  }
+  #err{position:fixed; left:16px; top:16px; z-index:9; color:#b4341f; font-size:12.5px}
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important} }
+  @media (max-width:720px){
+    #opts{display:none} #tip{display:none} #spec{max-width:64vw}
+    #views{right:16px}
+  }
 </style>
 
 <canvas id="cv"></canvas>
-<div class="panel" id="hud">
+
+<div class="plate" id="spec">
+  <div class="eyebrow">Reconstructed from one photograph</div>
   <h1>Aluminium sliding window</h1>
-  <p id="sub">1200 × 1280 × 160 mm · procedural PBR</p>
+  <div class="rule"></div>
+  <dl>
+    <dt>Overall</dt><dd id="dim">1200 &times; 1280 &times; 160 mm</dd>
+    <dt>Geometry</dt><dd id="tris">&mdash;</dd>
+    <dt>Shading</dt><dd>Procedural PBR</dd>
+  </dl>
 </div>
-<div class="panel" id="views"></div>
-<div class="panel" id="opts"></div>
-<div id="tip">drag orbit · wheel zoom · right-drag pan</div>
+
+<div class="plate" id="views"></div>
+<div class="plate" id="opts"></div>
+<div id="tip">drag orbit &middot; wheel zoom &middot; right-drag pan</div>
 <div id="err"></div>
 
 <script id="glb" type="application/octet-stream">__GLB_BASE64__</script>
@@ -587,19 +677,42 @@ function invert(m){
 }
 
 /* ------------------------------------------------------------------- ui */
+const RAILS = [
+  ['Whole unit', {photo:'As photographed', front:'Elevation', angle:'Three-quarter',
+                  corner:'Corner', outside:'From the street'}],
+  ['Detail',     {handle:'Handle', laths:'Shutter laths', meeting:'Meeting stile',
+                  box:'Headbox', sill:'Sill track'}],
+];
+
 function buildUI(){
   const vw = document.getElementById('views');
-  for(const k of Object.keys(VIEWS)){
-    const b = document.createElement('button');
-    b.textContent = k; b.dataset.v = k;
-    b.onclick = ()=>applyView(k);
-    vw.appendChild(b);
+  for(const [title, views] of RAILS){
+    const rail = document.createElement('div');
+    rail.className = 'rail';
+    const lab = document.createElement('div');
+    lab.className = 'eyebrow'; lab.textContent = title;
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    for(const [k, label] of Object.entries(views)){
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.dataset.v = k;
+      b.setAttribute('aria-pressed', 'false');
+      b.onclick = ()=>applyView(k);
+      chips.appendChild(b);
+    }
+    rail.append(lab, chips);
+    vw.appendChild(rail);
   }
+
   const opts = document.getElementById('opts');
+  const lab = document.createElement('div');
+  lab.className = 'eyebrow'; lab.textContent = 'Layers';
+  const list = document.createElement('div');
+  list.className = 'list';
   const groups = {
-    'security grille':['security_grille'],
-    'glazing':['sash_left_glass','sash_right_glass'],
-    'roller shutter':['shutter_laths_vented','shutter_bottom_rail','shutter_end_rail'],
+    'Security bars':['security_grille'],
+    'Glazing':['sash_left_glass','sash_right_glass'],
+    'Roller shutter':['shutter_laths_vented','shutter_bottom_rail','shutter_end_rail'],
   };
   for(const [label, nodes] of Object.entries(groups)){
     const l = document.createElement('label');
@@ -607,14 +720,15 @@ function buildUI(){
     c.type='checkbox'; c.checked=true;
     c.onchange = ()=>{ for(const n of nodes){ c.checked ? state.hidden.delete(n) : state.hidden.add(n); } };
     l.append(c, label);
-    opts.appendChild(l);
+    list.appendChild(l);
   }
   const l = document.createElement('label');
   const c = document.createElement('input');
   c.type='checkbox'; c.checked=!!state.studio;
   c.onchange = ()=>{ state.studio = c.checked?1:0; };
-  l.append(c,'studio backdrop');
-  opts.appendChild(l);
+  l.append(c,'Studio backdrop');
+  list.appendChild(l);
+  opts.append(lab, list);
 }
 
 function bindControls(){
@@ -658,8 +772,7 @@ function bindControls(){
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0.06,0.06,0.07,1);
     const tris = scene.prims.reduce((a,p)=>a+p.count/3,0);
-    document.getElementById('sub').textContent =
-      `1200 × 1280 × 160 mm · ${tris.toLocaleString()} triangles · procedural PBR`;
+    document.getElementById('tris').textContent = `${tris.toLocaleString()} triangles`;
     render();
   }catch(err){ errEl.textContent = 'load failed: '+err.message; console.error(err); }
 })();
