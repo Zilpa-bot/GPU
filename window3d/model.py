@@ -36,10 +36,11 @@ GLASS_T = 0.006
 BOX_Z0, BOX_Z1 = -0.062, 0.100
 
 SHUTTER_Z = -0.020           # centre of the roller-shutter curtain
-LATH_PITCH = 0.0345
+LATH_PITCH = 0.050           # 9 laths across the lowered curtain in the photo
 LATH_T = 0.011
+LATH_SLOT_PITCH = 0.058      # horizontal spacing of the punched vent slots
 SHUTTER_HALF_W = 0.585
-SHUTTER_BOTTOM = 0.514       # curtain is lowered to just under half height
+SHUTTER_BOTTOM = 0.500       # curtain is lowered to just under half height
 
 GRILLE_Z = -0.092
 GRILLE_BAR_SPACING = 0.200
@@ -155,11 +156,11 @@ def build_box():
     # bottom face, split around the curtain slot
     y = H_SASH
     for (a, b) in ((BOX_Z0, slot_z0), (slot_z1, BOX_Z1)):
-        m.add_quad((-W / 2, y, a), (-W / 2, y, b), (W / 2, y, b), (W / 2, y, a),
-                   (-W / 2, a), (-W / 2, b), (W / 2, b), (W / 2, a), normal=(0, -1, 0))
+        m.add_quad((-W / 2, y, a), (W / 2, y, a), (W / 2, y, b), (-W / 2, y, b),
+                   (-W / 2, a), (W / 2, a), (W / 2, b), (-W / 2, b), normal=(0, -1, 0))
     for (a, b) in ((-W / 2, -slot_x), (slot_x, W / 2)):
-        m.add_quad((a, y, slot_z0), (a, y, slot_z1), (b, y, slot_z1), (b, y, slot_z0),
-                   (a, slot_z0), (a, slot_z1), (b, slot_z1), (b, slot_z0), normal=(0, -1, 0))
+        m.add_quad((a, y, slot_z0), (b, y, slot_z0), (b, y, slot_z1), (a, y, slot_z1),
+                   (a, slot_z0), (b, slot_z0), (b, slot_z1), (a, slot_z1), normal=(0, -1, 0))
 
     # raised lip around the recessed face plate
     rect_tube(m, -W / 2, H_SASH, W / 2, H,
@@ -277,7 +278,7 @@ def build_shutter():
     for i in range(n):
         yb = y + i * LATH_PITCH
         target = solid if i == 0 else vented
-        lath(target, x0, x1, yb, LATH_PITCH + 0.0012, SHUTTER_Z, u_pitch=0.0352)
+        lath(target, x0, x1, yb, LATH_PITCH + 0.0015, SHUTTER_Z, u_pitch=LATH_SLOT_PITCH)
     vented.smooth_normals(30.0)
     solid.smooth_normals(30.0)
 
@@ -288,14 +289,17 @@ def build_shutter():
 
 def build_guides():
     """Shutter guide channels on the outside of each jamb."""
-    m = Mesh("shutter_guides", "guide")
+    m = Mesh("shutter_guides", "alu_frame")
     for sx in (-1, 1):
         # kept inside the frame outline: W/2 = 0.600 is the hard limit
         cx = sx * (SHUTTER_HALF_W + 0.0055)
-        prof = [(-0.0055, SHUTTER_Z - 0.020), (0.0055, SHUTTER_Z - 0.020),
+        # shallow C-channel: just deep enough to capture the curtain, and it
+        # stops flush with the frame's exterior face so it never breaks the
+        # unit's silhouette
+        prof = [(-0.0055, SHUTTER_Z - 0.012), (0.0055, SHUTTER_Z - 0.012),
                 (0.0055, SHUTTER_Z + 0.020), (-0.0055, SHUTTER_Z + 0.020),
                 (-0.0055, SHUTTER_Z + 0.014), (0.0035, SHUTTER_Z + 0.014),
-                (0.0035, SHUTTER_Z - 0.014), (-0.0055, SHUTTER_Z - 0.014)]
+                (0.0035, SHUTTER_Z - 0.008), (-0.0055, SHUTTER_Z - 0.008)]
         prof = [(cx + (p[0] * sx), p[1]) for p in prof]
         extrude(m, prof, "y", 0.010, H_SASH + 0.030)   # top buried in the box
     return m
@@ -314,8 +318,10 @@ def build_grille():
 
     # two mirrored waves whose crossings land exactly on the vertical bars,
     # producing the pointed-arch lattice seen in the photo
-    period = GRILLE_BAR_SPACING
-    amp = 0.064
+    # a sine and its mirror cross every half period, so the period is twice the
+    # bar spacing for the pointed arches to meet exactly on the verticals
+    period = 2.0 * (2 * half / n_bars)
+    amp = 0.085
     band = 0.330
     yc = 0.20
     while yc < H_SASH - 0.08:
@@ -350,8 +356,8 @@ def build_wall(thickness=0.22, size=(2.6, 2.55)):
                           ((ox1, oy1), (ox1, oy0), (-1, 0, 0)),
                           ((ox0, oy1), (ox1, oy1), (0, -1, 0)),
                           ((ox1, oy0), (ox0, oy0), (0, 1, 0))):
-        m.add_quad((p0[0], p0[1], zi), (p1[0], p1[1], zi),
-                   (p1[0], p1[1], zo), (p0[0], p0[1], zo),
+        m.add_quad((p0[0], p0[1], zo), (p1[0], p1[1], zo),
+                   (p1[0], p1[1], zi), (p0[0], p0[1], zi),
                    (p0[0], p0[1]), (p1[0], p1[1]), (p1[0], p1[1]), (p0[0], p0[1]),
                    normal=nrm)
     return m

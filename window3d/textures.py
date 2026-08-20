@@ -106,7 +106,7 @@ def detail_normal(res=1024, seed=13):
     return _png(height_to_normal(h, strength=0.30), "RGB")
 
 
-def slat_basecolor(res=256, seed=23, slot_w=0.46, slot_h=0.135):
+def slat_basecolor(res=256, seed=23, slot_w=0.48, slot_h=0.17):
     """One vented shutter-lath cell.
 
     U spans one 35 mm slot pitch, V spans one lath.  The punched ventilation

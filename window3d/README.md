@@ -51,11 +51,11 @@ everything else was measured against the window's own pixel width.
 | frame face / depth | 49 mm / 100 mm |
 | sash stile & rail face | 42 mm, 32 mm deep, 45 mm interlock |
 | glazing | 6 mm, single, in a captive groove |
-| shutter lath | 34.5 mm pitch, 11 mm thick, rolled crown |
-| vent slot | ≈16 × 4.5 mm capsule, 35.2 mm pitch |
-| curtain position | lowered to 514 mm — just under half the opening |
+| shutter lath | 50 mm pitch, 11 mm thick, rolled crown |
+| vent slot | ≈28 × 8.5 mm capsule, 58 mm pitch |
+| curtain position | lowered to 500 mm — just under half the opening |
 | handle | 200 mm vertical pull on each jamb-side stile |
-| security bars | 16 mm verticals at 200 mm, 12.4 mm ogee ribbons |
+| security bars | 16 mm verticals at 219 mm, 12.4 mm ogee ribbons whose crossings land on the verticals |
 
 ### How the geometry is built
 
@@ -88,6 +88,7 @@ The pipeline is deliberately split so that only one file is object-specific:
 mesh.py       generic hard-surface toolkit (mitred sweeps, lofts, tubes, welding)
 textures.py   procedural, tileable PBR maps authored as multipliers
 ao.py         voxel ray-marched ambient occlusion -> COLOR_0
+validate.py   geometry checks run on every build (winding, degeneracy, silhouette)
 gltf.py       GLB writer: welding, tangents, PBR materials, embedded PNGs
 model.py      <- the only object-specific file: measurements + assembly
 build.py      orchestration and OBJ/MTL export
@@ -107,11 +108,19 @@ To model a different object from a photograph:
 4. **Author materials as multipliers** over a shared detail set, and sample
    albedo from the photo with the lighting divided back out.
 5. **Render and look.** `shots.mjs` exists so each iteration can be inspected
-   from fixed viewpoints instead of guessed at.
+   from fixed viewpoints instead of guessed at. When a render shows something
+   wrong, identify the culprit rather than guessing: the black patch in the
+   third pass below was found by software-rasterising just that rectangle of
+   the screen and asking which part won the depth test.
+6. **Make each fixed defect a check.** `validate.py` runs on every build, so a
+   face wound against its normal now fails the build instead of showing up as
+   an unexplained dark shape three renders later.
 
-### Defects this loop caught and fixed
+### Defects the review loops caught and fixed
 
-Worth recording, because they are the failures this kind of asset tends to have:
+Worth recording, because they are the failures this kind of asset tends to have.
+
+**Earlier passes**
 
 * missing sRGB encode on the framebuffer — the whole model rendered near-black;
 * transposed slat UVs — vent slots came out as vertical ovals instead of dashes;
@@ -120,3 +129,27 @@ Worth recording, because they are the failures this kind of asset tends to have:
 * sash faces exactly coplanar with the frame rebate — z-fighting along the sill;
 * shadow depth bias larger than the 7 mm track ledges — sunlight leaked through;
 * shutter guides and the slot cavity poking past the frame outline.
+
+**Measurement pass** — comparing renders against the photograph feature by
+feature:
+
+* shutter lath pitch was 34.5 mm against ~50 mm in the photo, so the curtain
+  read as a venetian blind rather than a roller shutter;
+* the ogee ribbons used a period equal to the bar spacing. A sine and its
+  mirror cross every *half* period, so the pointed arches came out half-width
+  and landed between the verticals instead of on them;
+* the shutter guides were near-black and deeper than they needed to be, so they
+  read as a floating dark bar beside the frame.
+
+**Correctness pass** — a black rectangle at the headbox/frame junction, traced
+to its owner by rasterising that screen rectangle offline:
+
+* `box()` wound four of its six faces backwards. With back-face culling on,
+  the headbox's underside was culled from below and drawn from above with a
+  downward-facing normal — an unlit black patch. The same bug affected the
+  glazing, the seals and the slot cavity;
+* the headbox's hand-built bottom face and the wall reveal returns were wound
+  against their explicitly supplied normals;
+* `add_polygon()` fanned every outline, which is only valid for convex ones.
+  The crescent-shaped lath sections and the C-channel guide profile produced
+  inverted and degenerate triangles; it now ear-clips.

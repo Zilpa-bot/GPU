@@ -11,6 +11,7 @@ import numpy as np
 import ao
 import model
 import textures
+import validate
 from gltf import GLB, weld
 
 _PARTS_CACHE = {}
@@ -21,6 +22,10 @@ def get_parts(include_grille=True, include_wall=False, bake_ao=True):
     key = (include_grille, include_wall, bake_ao)
     if key not in _PARTS_CACHE:
         parts = model.build(include_grille=include_grille, include_wall=include_wall)
+        print("\u00b7 checking geometry \u2026")
+        sil = None if include_wall else (-model.W / 2, model.W / 2, -0.001, model.H + 0.001)
+        if validate.check(parts, silhouette=sil):
+            raise SystemExit("geometry checks failed")
         if bake_ao:
             ao.bake(parts)
         _PARTS_CACHE[key] = parts

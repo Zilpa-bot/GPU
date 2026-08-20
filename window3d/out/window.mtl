@@ -19,7 +19,7 @@ norm textures/detail_normal.png
 map_Pr textures/detail_orm.png
 
 newmtl lath_vented
-Kd 0.2386 0.2559 0.2694
+Kd 0.2396 0.2569 0.2705
 Ks 0.5 0.5 0.5
 Pr 0.3949
 Pm 0.3510
@@ -29,7 +29,7 @@ map_Pr textures/detail_orm.png
 map_d textures/slat_basecolor.png
 
 newmtl lath_solid
-Kd 0.2386 0.2559 0.2694
+Kd 0.2396 0.2569 0.2705
 Ks 0.5 0.5 0.5
 Pr 0.3949
 Pm 0.3510

@@ -40,11 +40,16 @@ class Mesh:
         self.add_tri(p0, p2, p3, uv0, uv2, uv3, normal)
 
     def add_polygon(self, pts, uvs, normal=None):
-        """Convex polygon fan."""
+        """Triangulate a simple polygon, convex or not.
+
+        A fan is only valid for convex outlines; the lath sections and the
+        guide C-channel are concave, and fanning them produced inverted and
+        degenerate triangles that rendered as black patches.
+        """
         if normal is None:
             normal = polygon_normal(pts)
-        for i in range(1, len(pts) - 1):
-            self.add_tri(pts[0], pts[i], pts[i + 1], uvs[0], uvs[i], uvs[i + 1], normal)
+        for i, j, k in triangulate(pts, normal):
+            self.add_tri(pts[i], pts[j], pts[k], uvs[i], uvs[j], uvs[k], normal)
 
     def extend(self, other: "Mesh"):
         base = len(self.v)
@@ -164,6 +169,68 @@ def polygon_normal(pts):
     return norm(n)
 
 
+
+def triangulate(pts, normal):
+    """Ear-clip a simple 3-D polygon that lies (near enough) in one plane.
+
+    Returns index triples wound consistently with `normal`.
+    """
+    n = len(pts)
+    if n < 3:
+        return []
+    if n == 3:
+        return [(0, 1, 2)]
+    # build an in-plane basis so the polygon can be clipped in 2-D
+    ref = (0.0, 0.0, 1.0) if abs(normal[2]) < 0.9 else (1.0, 0.0, 0.0)
+    e1 = norm(cross(ref, normal))
+    e2 = norm(cross(normal, e1))
+    p2 = [(dot(p, e1), dot(p, e2)) for p in pts]
+    idx = list(range(n))
+    if _area2(p2, idx) < 0:
+        idx.reverse()
+
+    out = []
+    guard = 0
+    while len(idx) > 3 and guard < 4 * n:
+        guard += 1
+        clipped = False
+        for i in range(len(idx)):
+            a, b, c = idx[i - 1], idx[i], idx[(i + 1) % len(idx)]
+            if _cross2(p2[a], p2[b], p2[c]) <= 1e-14:
+                continue                      # reflex or collinear -> not an ear
+            if any(_inside(p2[a], p2[b], p2[c], p2[o])
+                   for o in idx if o not in (a, b, c)):
+                continue
+            out.append((a, b, c))
+            idx.pop(i)
+            clipped = True
+            break
+        if not clipped:                       # degenerate outline: fall back
+            break
+    for i in range(1, len(idx) - 1):
+        out.append((idx[0], idx[i], idx[i + 1]))
+    return out
+
+
+def _area2(p2, idx):
+    a = 0.0
+    for i in range(len(idx)):
+        x0, y0 = p2[idx[i]]
+        x1, y1 = p2[idx[(i + 1) % len(idx)]]
+        a += x0 * y1 - x1 * y0
+    return a
+
+
+def _cross2(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+
+
+def _inside(a, b, c, p):
+    d1 = _cross2(a, b, p)
+    d2 = _cross2(b, c, p)
+    d3 = _cross2(c, a, p)
+    return (d1 > 1e-14 and d2 > 1e-14 and d3 > 1e-14)
+
 # ------------------------------------------------------------------ primitives
 _AXIS_UV = {0: (1, 2), 1: (0, 2), 2: (0, 1)}
 
@@ -172,11 +239,13 @@ def box(mesh: Mesh, lo, hi, uv_offset=(0.0, 0.0), skip=()):
     """Axis-aligned box with world-space planar UVs per face."""
     x0, y0, z0 = lo
     x1, y1, z1 = hi
+    # every face wound counter-clockwise as seen from outside, so the winding
+    # agrees with the shading normal and back-face culling behaves
     faces = {
-        "-x": ([(x0, y0, z1), (x0, y0, z0), (x0, y1, z0), (x0, y1, z1)], (-1, 0, 0)),
-        "+x": ([(x1, y0, z0), (x1, y0, z1), (x1, y1, z1), (x1, y1, z0)], (1, 0, 0)),
-        "-y": ([(x0, y0, z0), (x0, y0, z1), (x1, y0, z1), (x1, y0, z0)], (0, -1, 0)),
-        "+y": ([(x0, y1, z1), (x0, y1, z0), (x1, y1, z0), (x1, y1, z1)], (0, 1, 0)),
+        "-x": ([(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)], (-1, 0, 0)),
+        "+x": ([(x1, y0, z1), (x1, y0, z0), (x1, y1, z0), (x1, y1, z1)], (1, 0, 0)),
+        "-y": ([(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)], (0, -1, 0)),
+        "+y": ([(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)], (0, 1, 0)),
         "-z": ([(x1, y0, z0), (x0, y0, z0), (x0, y1, z0), (x1, y1, z0)], (0, 0, -1)),
         "+z": ([(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)], (0, 0, 1)),
     }
